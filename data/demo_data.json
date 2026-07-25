@@ -1,0 +1,48 @@
+{
+  "success": true,
+  "domain": "vala.ma",
+  "mode": "offline_demo",
+  "timestamp": "2026-05-13T10:00:00+01:00",
+  "http": {
+    "code": 200,
+    "time": 245,
+    "ok": true,
+    "ip": "102.180.25.12",
+    "size": 45230,
+    "performance_label": "Excellent",
+    "performance_score": 95,
+    "diagnosis": "Site opérationnel - Réponse OK",
+    "security_headers": {"found": ["X-Frame-Options","X-Content-Type-Options"], "missing": ["Strict-Transport-Security"], "score": 66}
+  },
+  "ssl": {
+    "valid": true,
+    "days": 89,
+    "expire": "2026-08-15 14:30:00",
+    "valid_from": "2025-08-15",
+    "issuer": "Let's Encrypt",
+    "subject": "vala.ma",
+    "is_wildcard": false,
+    "auto_renew": true,
+    "diagnosis": "SSL Excellent - Valide encore 89 jours"
+  },
+  "dns": {
+    "a": "102.180.25.12",
+    "aaaa": "N/A",
+    "mx": "mail.vala.ma",
+    "mx_ok": true,
+    "has_spf": true,
+    "has_dmarc": true,
+    "ns": ["ns1.vala.ma","ns2.vala.ma"],
+    "cloudflare": true,
+    "diagnosis": "Configuration DNS parfaite",
+    "score": 100
+  },
+  "score": 95,
+  "grade": "A",
+  "grade_label": "Excellent - Prêt pour production",
+  "issues": [],
+  "warnings": ["Header Strict-Transport-Security manquant"],
+  "sols": ["Ajoutez HSTS pour +10 points de sécurité"],
+  "details": {"http": "HTTP OK +38pts","ssl": "SSL Excellent +30pts","dns": "MX OK +20pts","security": "Sécurité +6.6pts"},
+  "recommendations": ["Félicitations! Maintenez ce niveau"]
+}
