@@ -1,89 +1,69 @@
 <?php
-require_once 'BaseChecker.php';
+require_once __DIR__ . '/BaseChecker.php';
 
 class SslChecker extends BaseChecker {
+    public function getName(): string {
+        return 'SSL Certificate Checker';
+    }
 
     public function check(): array {
-        $this->log("Début vérification SSL pour {$this->domain}:443");
-
-        $context = stream_context_create([
+        $gcontext = stream_context_create([
             "ssl" => [
                 "capture_peer_cert" => true,
-                "verify_peer" => false,
+                "verify_peer"      => false,
                 "verify_peer_name" => false,
-                "allow_self_signed" => true,
             ]
         ]);
 
         $client = @stream_socket_client(
-            "ssl://{$this->domain}:443",
+            "ssl://" . $this->domain . ":443",
             $errno,
             $errstr,
             $this->timeout,
             STREAM_CLIENT_CONNECT,
-            $context
+            $gcontext
         );
 
         if (!$client) {
-            $this->log("Connexion SSL échouée: $errstr");
-            return $this->validateResult([
-                'valid' => false, 'days' => 0, 'expire' => 'N/A', 'issuer' => 'N/A',
-                'auto_renew' => false, 'chain_ok' => false,
-                'diagnosis' => "Impossible de se connecter en SSL: $errstr",
-                'recommendation' => "Vérifiez que le port 443 est ouvert et que le SSL est installé",
-                'error' => $errstr
-            ]);
+            return [
+                'valid'          => false,
+                'days_remaining' => 0,
+                'issuer'         => 'N/A',
+                'valid_from'     => 'N/A',
+                'valid_to'       => 'N/A',
+                'signature_algo' => 'N/A',
+                'error'          => "Échec de connexion SSL ($errno): $errstr"
+            ];
         }
 
-        $params = stream_context_get_params($client);
-        $cert = $params['options']['ssl']['peer_certificate'];
-        $certInfo = openssl_x509_parse($cert);
+        $cont = stream_context_get_params($client);
+        $cert = openssl_x509_parse($cont["options"]["ssl"]["peer_certificate"]);
         fclose($client);
 
-        $validFrom = $certInfo['validFrom_time_t'];
-        $validTo = $certInfo['validTo_time_t'];
-        $daysLeft = (int) floor(($validTo - time()) / 86400);
-        $issuer = $certInfo['issuer']['O']?? $certInfo['issuer']['CN']?? 'Inconnu';
-        $subject = $certInfo['subject']['CN']?? 'N/A';
-        $isWildcard = str_starts_with($subject, '*.');
-        $isLetsEncrypt = str_contains(strtolower($issuer), 'let\'s encrypt') || str_contains(strtolower($issuer), 'letsencrypt');
+        if (!$cert) {
+            return [
+                'valid'          => false,
+                'days_remaining' => 0,
+                'issuer'         => 'N/A',
+                'error'          => 'Impossible de lire le certificat SSL.'
+            ];
+        }
 
-        $this->log("Certificat trouvé: $subject, expire dans $daysLeft jours");
+        $validFrom = date('Y-m-d H:i:s', $cert['validFrom_time_t'] ?? 0);
+        $validTo   = date('Y-m-d H:i:s', $cert['validTo_time_t'] ?? 0);
+        $daysRemaining = round(($cert['validTo_time_t'] - time()) / 86400);
 
-        $diagnosis = match(true) {
-            $daysLeft < 0 => "🚨 Certificat EXPIRÉ depuis ".abs($daysLeft)." jours",
-            $daysLeft <= 7 => "⚠️ Expire dans $daysLeft jours - RENOUVELLEMENT URGENT",
-            $daysLeft <= 30 => "Expire bientôt dans $daysLeft jours",
-            $daysLeft <= 60 => "SSL valide mais prévoir renouvellement dans $daysLeft jours",
-            default => "SSL Excellent - Valide encore $daysLeft jours"
-        };
+        $issuer = $cert['issuer']['O'] ?? ($cert['issuer']['CN'] ?? 'Inconnu');
+        $subject = $cert['subject']['CN'] ?? $this->domain;
 
-        $autoRenew = $isLetsEncrypt; // Let's Encrypt se renouvelle auto si bien configuré
-
-        return $this->validateResult([
-            'valid' => true,
-            'days' => $daysLeft,
-            'expire' => date('Y-m-d H:i:s', $validTo),
-            'valid_from' => date('Y-m-d', $validFrom),
-            'issuer' => $issuer,
-            'subject' => $subject,
-            'is_wildcard' => $isWildcard,
-            'is_letsencrypt' => $isLetsEncrypt,
-            'auto_renew' => $autoRenew,
-            'chain_ok' => true,
-            'diagnosis' => $diagnosis,
-            'recommendation' => $daysLeft < 30? "Renouvelez via cPanel > SSL/TLS > Let's Encrypt" : "Aucune action requise",
-            'cert_details' => [
-                'serial' => $certInfo['serialNumberHex']?? 'N/A',
-                'algo' => $certInfo['signatureTypeSN']?? 'N/A',
-            ]
-        ]);
-    }
-
-    public function checkChain(): array {
-        // Vérifie toute la chaine SSL
-        $this->log("Vérification chaine SSL");
-        return ['chain_valid' => true, 'chain_length' => 3];
+        return [
+            'valid'          => ($daysRemaining > 0),
+            'days_remaining' => (int)$daysRemaining,
+            'issuer'         => $issuer,
+            'domain_name'    => $subject,
+            'valid_from'     => $validFrom,
+            'valid_to'       => $validTo,
+            'signature_algo' => $cert['signatureTypeSN'] ?? 'Inconnu'
+        ];
     }
 }
-?>

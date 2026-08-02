@@ -1,59 +1,47 @@
-public function check($domain): array {<?php
-require_once 'BaseChecker.php';
+<?php
+require_once __DIR__ . '/BaseChecker.php';
 
 class BlacklistChecker extends BaseChecker {
-    // زدناك ليست كبيرة
-    private $rbls = [
+    private array $rbls = [
         'zen.spamhaus.org',
         'bl.spamcop.net',
-        'b.barracudacentral.org',
-        'dnsbl.sorbs.net',
-        'psbl.surriel.com',
-        'cbl.abuseat.org'
+        'cbl.abuseat.org',
+        'dnsbl.sorbs.net'
     ];
 
-    public function check(string $domain): array {
-        $result = [
-            'status' => 'ok',
-            'blacklisted' => false,
-            'details' => [],
-            'checked_at' => date('Y-m-d H:i:s')
-        ];
+    public function getName(): string {
+        return 'Blacklist RBL Checker';
+    }
 
-        // حول الدومين ل IP الى كان دومين
-        $ip = $domain;
-        if (!filter_var($domain, FILTER_VALIDATE_IP)) {
-            $ip = gethostbyname($domain);
+    public function check(): array {
+        $ip = gethostbyname($this->domain);
+        
+        if ($ip === $this->domain) {
+            return [
+                'blacklisted' => false,
+                'ip'          => 'N/A',
+                'listed_on'   => [],
+                'total_rbls'  => count($this->rbls),
+                'error'       => 'Impossible de résoudre l\'adresse IP du domaine.'
+            ];
         }
 
-        // الى ما لقيناش IP
-        if ($ip === $domain && !filter_var($ip, FILTER_VALIDATE_IP)) {
-            $result['status'] = 'error';
-            $result['error'] = 'Cannot resolve domain';
-            return $result;
-        }
-
-        // قلب IP باش يولي صالح لـ RBL
         $reverseIp = implode('.', array_reverse(explode('.', $ip)));
+        $listedOn = [];
 
         foreach ($this->rbls as $rbl) {
-            $check = $reverseIp . '.' . $rbl;
-            // checkdnsrr خدام دابا حيت قلبنا IP
-            if (checkdnsrr($check, 'A')) {
-                $result['blacklisted'] = true;
-                $result['status'] = 'listed';
-                $result['details'][] = [
-                    'rbl' => $rbl,
-                    'listed' => true
-                ];
+            $lookup = $reverseIp . '.' . $rbl;
+            if (checkdnsrr($lookup, 'A')) {
+                $listedOn[] = $rbl;
             }
         }
-        
-        return $result;
-    }
 
-    public function getName() {
-        return "Blacklist Checker";
+        return [
+            'blacklisted' => !empty($listedOn),
+            'ip'          => $ip,
+            'listed_on'   => $listedOn,
+            'total_rbls'  => count($this->rbls),
+            'checked_count' => count($this->rbls) - count($listedOn)
+        ];
     }
 }
-?>
