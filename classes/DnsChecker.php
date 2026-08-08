@@ -1,42 +1,66 @@
 <?php
-require_once __DIR__ . '/BaseChecker.php';
 
-class DnsChecker extends BaseChecker {
-    public function getName(): string {
-        return 'DNS Records Checker';
+class DnsChecker {
+    private $domain;
+
+    public function __construct($domain) {
+        $clean = preg_replace('/^https?:\/\//i', '', $domain);
+        $this->domain = explode('/', $clean)[0];
     }
 
     public function check(): array {
-        $aRecords     = @dns_get_record($this->domain, DNS_A);
-        $aaaaRecords  = @dns_get_record($this->domain, DNS_AAAA);
-        $mxRecords    = @dns_get_record($this->domain, DNS_MX);
-        $txtRecords   = @dns_get_record($this->domain, DNS_TXT);
-        $nsRecords    = @dns_get_record($this->domain, DNS_NS);
+        if (empty($this->domain)) {
+            return ['resolved' => false, 'mx_valid' => false];
+        }
 
-        $hasSpf = false;
-        if (!empty($txtRecords)) {
-            foreach ($txtRecords as $txt) {
-                if (isset($txt['entries'])) {
-                    foreach ($txt['entries'] as $entry) {
-                        if (strpos($entry, 'v=spf1') !== false) {
-                            $hasSpf = true;
-                            break 2;
-                        }
-                    }
-                }
+        // 1. التحقق من وجود IP (A or AAAA Records)
+        $hasIp = checkdnsrr($this->domain, "A") || checkdnsrr($this->domain, "AAAA");
+
+        // 2. التحقق من الـ MX Records بـ الطريقة العادية
+        $hasMx = checkdnsrr($this->domain, "MX");
+
+        // 3. إذا فشل النظام المحلي فـ إيجاد MX (مثلاً مع google.com فـ XAMPP)، نستخدم Google DNS عبر UDP
+        if (!$hasMx && function_exists('dns_get_record')) {
+            $records = @dns_get_record($this->domain, DNS_MX);
+            if (!empty($records)) {
+                $hasMx = true;
             }
         }
 
+        // 4. حيل إضافية لضمان الدومينات الكبرى (Fallback Check)
+        if (!$hasMx) {
+            $hasMx = $this->queryGoogleDnsMx($this->domain);
+        }
+
         return [
-            'has_a'       => !empty($aRecords),
-            'has_aaaa'    => !empty($aaaaRecords),
-            'has_mx'      => !empty($mxRecords),
-            'has_txt'     => !empty($txtRecords),
-            'has_spf'     => $hasSpf,
-            'ip_v4'       => $aRecords[0]['ip'] ?? 'N/A',
-            'ip_v6'       => $aaaaRecords[0]['ipv6'] ?? 'N/A',
-            'mx_servers'  => array_column($mxRecords ?? [], 'target'),
-            'nameservers' => array_column($nsRecords ?? [], 'target')
+            'resolved' => $hasIp,
+            'mx_valid' => $hasMx
         ];
+    }
+
+    /**
+     * الاستعلام المباشر عبر Google DNS API للقطع مع مشاكل DNS المحلي فـ Windows
+     */
+    private function queryGoogleDnsMx($domain): bool {
+        $url = "https://dns.google/resolve?name=" . urlencode($domain) . "&type=MX";
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 3,
+            CURLOPT_SSL_VERIFYPEER => false
+        ]);
+
+        $response = curl_exec($ch);
+        curl_close($ch);
+
+        if ($response) {
+            $data = json_decode($response, true);
+            if (isset($data['Answer']) && count($data['Answer']) > 0) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

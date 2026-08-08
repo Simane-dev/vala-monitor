@@ -1,5 +1,6 @@
 <?php
-require 'config/database.php';
+require_once __DIR__ . '/config/database.php';
+$pdo = Database::getInstance();
 
 // Récupération des filtres
 $filterDomain = $_GET['domain']?? '';

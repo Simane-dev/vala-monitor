@@ -1,69 +1,82 @@
 <?php
-require_once __DIR__ . '/BaseChecker.php';
 
-class SslChecker extends BaseChecker {
-    public function getName(): string {
-        return 'SSL Certificate Checker';
+class SslChecker {
+    private $domain;
+
+    public function __construct($domain) {
+        // تنظيف الدومين من أي مسارات أو بروتوكولات
+        $clean = preg_replace('/^https?:\/\//i', '', $domain);
+        $this->domain = explode('/', $clean)[0];
     }
 
-    public function check(): array {
+    public function check() {
+        if (empty($this->domain)) {
+            return [
+                'valid' => false,
+                'days_left' => 0,
+                'issuer' => 'Inconnu'
+            ];
+        }
+
+        // تحضير الـ SSL Context مع تفعيل SNI
         $gcontext = stream_context_create([
             "ssl" => [
                 "capture_peer_cert" => true,
-                "verify_peer"      => false,
-                "verify_peer_name" => false,
+                "verify_peer"       => false,
+                "verify_peer_name"  => false,
+                "SNI_enabled"        => true,
+                "peer_name"         => $this->domain
             ]
         ]);
 
+        // استعمال @ لإخفاء أي PHP Warnings أثناء الاتصال
         $client = @stream_socket_client(
             "ssl://" . $this->domain . ":443",
             $errno,
             $errstr,
-            $this->timeout,
+            5,
             STREAM_CLIENT_CONNECT,
             $gcontext
         );
 
         if (!$client) {
             return [
-                'valid'          => false,
-                'days_remaining' => 0,
-                'issuer'         => 'N/A',
-                'valid_from'     => 'N/A',
-                'valid_to'       => 'N/A',
-                'signature_algo' => 'N/A',
-                'error'          => "Échec de connexion SSL ($errno): $errstr"
+                'valid' => false,
+                'days_left' => 0,
+                'issuer' => 'Inconnu'
             ];
         }
 
         $cont = stream_context_get_params($client);
-        $cert = openssl_x509_parse($cont["options"]["ssl"]["peer_certificate"]);
-        fclose($client);
+        $cert = $cont["options"]["ssl"]["peer_certificate"] ?? null;
 
         if (!$cert) {
+            @fclose($client);
             return [
-                'valid'          => false,
-                'days_remaining' => 0,
-                'issuer'         => 'N/A',
-                'error'          => 'Impossible de lire le certificat SSL.'
+                'valid' => false,
+                'days_left' => 0,
+                'issuer' => 'Inconnu'
             ];
         }
 
-        $validFrom = date('Y-m-d H:i:s', $cert['validFrom_time_t'] ?? 0);
-        $validTo   = date('Y-m-d H:i:s', $cert['validTo_time_t'] ?? 0);
-        $daysRemaining = round(($cert['validTo_time_t'] - time()) / 86400);
+        $certData = openssl_x509_parse($cert);
+        @fclose($client);
 
-        $issuer = $cert['issuer']['O'] ?? ($cert['issuer']['CN'] ?? 'Inconnu');
-        $subject = $cert['subject']['CN'] ?? $this->domain;
+        if (!$certData || !isset($certData['validTo_time_t'])) {
+            return [
+                'valid' => false,
+                'days_left' => 0,
+                'issuer' => 'Inconnu'
+            ];
+        }
+
+        $validTo = $certData['validTo_time_t'];
+        $daysLeft = max(0, (int)floor(($validTo - time()) / 86400));
 
         return [
-            'valid'          => ($daysRemaining > 0),
-            'days_remaining' => (int)$daysRemaining,
-            'issuer'         => $issuer,
-            'domain_name'    => $subject,
-            'valid_from'     => $validFrom,
-            'valid_to'       => $validTo,
-            'signature_algo' => $cert['signatureTypeSN'] ?? 'Inconnu'
+            'valid' => $daysLeft > 0,
+            'days_left' => $daysLeft,
+            'issuer' => $certData['issuer']['O'] ?? ($certData['issuer']['CN'] ?? 'Inconnu')
         ];
     }
 }

@@ -1,58 +1,77 @@
 <?php
-header('Content-Type: application/json; charset=UTF-8');
-header('Access-Control-Allow-Origin: *');
+require_once '../config/database.php';
+require_once '../classes/BaseChecker.php';
+require_once '../classes/HttpChecker.php';
+require_once '../classes/SslChecker.php';
+require_once '../classes/DnsChecker.php';
+require_once '../classes/BlacklistChecker.php';
+require_once '../classes/ValaScorer.php';
 
-require_once __DIR__ . '/../classes/BaseChecker.php';
-require_once __DIR__ . '/../classes/HttpChecker.php';
-require_once __DIR__ . '/../classes/SslChecker.php';
-require_once __DIR__ . '/../classes/DnsChecker.php';
-require_once __DIR__ . '/../classes/BlacklistChecker.php';
-require_once __DIR__ . '/../classes/ValaScorer.php';
+header('Content-Type: application/json');
 
-$domain = $_GET['domain'] ?? $_POST['domain'] ?? null;
+$domain = $_GET['domain'] ?? $_POST['domain'] ?? '';
 
-if (!$domain) {
-    http_response_code(400);
-    echo json_encode([
-        'status'  => 'error',
-        'message' => 'Le paramètre domain est obligatoire.'
-    ], JSON_PRETTY_PRINT);
+if (empty($domain)) {
+    echo json_encode(['status' => 'error', 'message' => 'Domaine manquant']);
     exit;
 }
 
-$domain = preg_replace('#^https?://#', '', trim($domain));
-$domain = rtrim($domain, '/');
+$domain = str_replace(['http://', 'https://', 'www.'], '', $domain);
+$domain = trim($domain, '/');
+
+function checkLocalInternet() {
+    // 8.8.8.8 هو Google DNS, Timeout 2 ثواني
+    $connected = @fsockopen("8.8.8.8", 53, $errno, $errstr, 2);
+    if ($connected) {
+        fclose($connected);
+        return true;
+    }
+    return false;
+}
+
+if (!checkLocalInternet()) {
+    echo json_encode([
+        'status' => 'error',
+        'message' => 'Pas de connexion Internet sur le serveur.'
+    ]);
+    exit;
+}
 
 try {
-    $httpChecker      = new HttpChecker($domain);
-    $sslChecker       = new SslChecker($domain);
-    $dnsChecker       = new DnsChecker($domain);
+    $httpChecker = new HttpChecker($domain);
+    $sslChecker = new SslChecker($domain);
+    $dnsChecker = new DnsChecker($domain);
     $blacklistChecker = new BlacklistChecker($domain);
 
-    $httpData      = $httpChecker->check();
-    $sslData       = $sslChecker->check();
-    $dnsData       = $dnsChecker->check();
+    $httpData = $httpChecker->check();
+    $sslData = $sslChecker->check();
+    $dnsData = $dnsChecker->check();
     $blacklistData = $blacklistChecker->check();
 
-    $scoreData = ValaScorer::analyze($httpData, $sslData, $dnsData, $blacklistData);
+    $allResults = [
+        'HttpChecker' => $httpData,
+        'SslChecker' => $sslData,
+        'DnsChecker' => $dnsData,
+        'BlacklistChecker' => $blacklistData
+    ];
+
+    $scorer = new ValaScorer($allResults);
+    $scoreData = $scorer->calculate();
 
     echo json_encode([
-        'status'    => 'success',
-        'domain'    => $domain,
+        'status' => 'success',
+        'domain' => $domain,
         'timestamp' => date('c'),
-        'score'     => $scoreData,
-        'details'   => [
-            'http'      => $httpData,
-            'ssl'       => $sslData,
-            'dns'       => $dnsData,
+        'score' => $scoreData,
+        'details' => [
+            'http' => $httpData,
+            'ssl' => $sslData,
+            'dns' => $dnsData,
             'blacklist' => $blacklistData
         ]
-    ], JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE);
+    ]);
 
 } catch (Exception $e) {
-    http_response_code(500);
-    echo json_encode([
-        'status'  => 'error',
-        'message' => $e->getMessage()
-    ], JSON_PRETTY_PRINT);
+    echo json_encode(['status' => 'error', 'message' => $e->getMessage()]);
 }
+?>

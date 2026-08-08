@@ -25,7 +25,15 @@ try {
         $dnsData       = (new DnsChecker($domain))->check();
         $blacklistData = (new BlacklistChecker($domain))->check();
 
-        $scoreData = ValaScorer::analyze($httpData, $sslData, $dnsData, $blacklistData);
+        $allResults = [
+    'HttpChecker' => $httpData,
+    'SslChecker' => $sslData,
+    'DnsChecker' => $dnsData,
+    'BlacklistChecker' => $blacklistData
+];
+
+$scorer = new ValaScorer($allResults);
+$scoreData = $scorer->calculate();
 
         $saveStmt = $db->prepare("INSERT INTO checks (domain, score, status, penalties_json, created_at) VALUES (?, ?, ?, ?, NOW())");
         $saveStmt->execute([

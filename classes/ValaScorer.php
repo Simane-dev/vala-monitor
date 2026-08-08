@@ -1,55 +1,84 @@
 <?php
+
 class ValaScorer {
-    private array $results;
-    private int $baseScore = 100;
-    private array $penalties = [];
-    private array $weights = [
-        'http'      => 0.40, // 40% من النقطة
-        'ssl'       => 0.30, // 30% من النقطة
-        'blacklist' => 0.20, // 20% من النقطة
-        'dns'       => 0.10  // 10% من النقطة
-    ];
+    private $results;
 
     public function __construct(array $results) {
         $this->results = $results;
     }
 
     public function calculate(): array {
-        $score = $this->baseScore;
+        $http = $this->results['HttpChecker'] ?? [];
+        $ssl  = $this->results['SslChecker'] ?? [];
+        $dns  = $this->results['DnsChecker'] ?? [];
 
-        // 1. تقييم الـ HTTP
-        foreach ($this->results as $checkerName => $data) {
-            if (strpos($checkerName, 'Http') !== false) {
-                if (isset($data['status_code']) && $data['status_code'] !== 200) {
-                    $score -= (40 * $this->weights['http']);
-                    $this->penalties[] = "Code HTTP non valide (" . $data['status_code'] . ")";
-                }
-            }
-            
-            // 2. تقييم الـ SSL
-            if (strpos($checkerName, 'Ssl') !== false) {
-                if (isset($data['valid']) && !$data['valid']) {
-                    $score -= (100 * $this->weights['ssl']);
-                    $this->penalties[] = "Certificat SSL invalide ou expiré";
-                }
-            }
+        $statusCode  = (int)($http['status_code'] ?? $http['http_code'] ?? 0);
+        $responseTime = (int)($http['response_time'] ?? 0);
+        $sslValid    = (bool)($ssl['valid'] ?? false);
+        $sslDays     = (int)($ssl['days_left'] ?? $ssl['ssl_days'] ?? 0);
+        $dnsResolved = (bool)($dns['resolved'] ?? true);
+        $mxValid     = (bool)($dns['mx_valid'] ?? $dns['mx_ok'] ?? false);
 
-            // 3. تقييم Blacklist
-            if (strpos($checkerName, 'Blacklist') !== false) {
-                if (isset($data['blacklisted']) && $data['blacklisted']) {
-                    $score -= (100 * $this->weights['blacklist']);
-                    $this->penalties[] = "Présence sur liste noire (RBL)";
-                }
-            }
+        // 1. الشرط الوحيد اللي كيعطي 0 هو إلا كان الموقع طايح تماماً (Offline/No DNS)
+        if ($statusCode === 0 || !$dnsResolved) {
+            return [
+                'score'     => 0,
+                'status'    => 'CRITICAL',
+                'penalties' => ['SITE_OFFLINE_OR_DNS_FAILED']
+            ];
         }
 
-        $finalScore = (int) max(0, round($score));
+        // يبدأ بـ 100 نقطة ونبدأ الخصم المنطقي
+        $score = 100;
+        $penalties = [];
+
+        // أ. خصم الـ HTTP Code
+        if ($statusCode !== 200) {
+            $score -= 30;
+            $penalties[] = "HTTP_NOT_200";
+        }
+
+        // ب. خصم زمن الاستجابة (Temps de réponse) - خصم تدريجي وليس قاتل
+        if ($responseTime > 2000) {
+            $score -= 25; // نقص 25 نقطة فقط حيت بطيء (أكثر من 2 ثواني)
+            $penalties[] = "VERY_SLOW_RESPONSE";
+        } elseif ($responseTime > 1000) {
+            $score -= 15;
+            $penalties[] = "SLOW_RESPONSE";
+        } elseif ($responseTime > 500) {
+            $score -= 5;
+            $penalties[] = "MODERATE_RESPONSE";
+        }
+
+        // ج. خصم الـ SSL
+        if (!$sslValid || $sslDays <= 0) {
+            $score -= 30;
+            $penalties[] = "NO_SSL_OR_EXPIRED";
+        } elseif ($sslDays < 30) {
+            $score -= 10;
+            $penalties[] = "SSL_EXPIRING_SOON";
+        }
+
+        // د. خصم سيرفر البريد MX
+        if (!$mxValid) {
+            $score -= 10;
+            $penalties[] = "NO_MX_RECORD";
+        }
+
+        // ضمان أن النتيجة محصورة بين 0 و 100
+        $finalScore = max(0, min(100, $score));
+
+        $status = 'EXCELLENT';
+        if ($finalScore < 50) {
+            $status = 'CRITICAL';
+        } elseif ($finalScore < 75) {
+            $status = 'WARNING';
+        }
 
         return [
             'score'     => $finalScore,
-            'status'    => $finalScore >= 80 ? 'EXCELLENT' : ($finalScore >= 50 ? 'MOYEN' : 'CRITIQUE'),
-            'penalties' => $this->penalties,
-            'generated_at' => date('Y-m-d H:i:s')
+            'status'    => $status,
+            'penalties' => $penalties
         ];
     }
 }
